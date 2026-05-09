@@ -1,0 +1,22 @@
+# 환경변수 (절대 커밋 금지)
+.env
+
+# 데이터베이스
+*.db
+*.sqlite3
+
+# 로그
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
