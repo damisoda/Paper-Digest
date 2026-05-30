@@ -8,6 +8,7 @@
 import json
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, Future
 from loguru import logger
 
 from config import config
@@ -200,13 +201,31 @@ class OllamaSummarizer:
         return paper
 
     def summarize_batch(self, papers: list[Paper]) -> list[Paper]:
-        """여러 논문 순차 요약"""
+        """여러 논문 요약.
+
+        LLM 호출(GPU)은 직렬을 유지하되, PDF 다운로드만 백그라운드 스레드풀로
+        미리 받아둔다(prefetch) — GPU가 다음 논문 PDF의 네트워크 대기에 묶이지 않도록.
+        """
         total = len(papers)
-        logger.info(f"[Ollama] 배치 시작: {total}편")
-        results = []
-        for i, paper in enumerate(papers, 1):
-            logger.info(f"[Ollama] [{i}/{total}] {paper.arxiv_id}")
-            results.append(self.summarize(paper))
+        workers = max(1, min(config.PDF_PREFETCH_WORKERS, total))
+        logger.info(f"[Ollama] 배치 시작: {total}편 (PDF prefetch 워커 {workers})")
+
+        results: list[Paper] = []
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pdf-prefetch") as pool:
+            # 모든 논문 PDF 다운로드를 동시에 시작 (캐시에 적재)
+            futures: dict[str, Future] = {
+                p.arxiv_id: pool.submit(self._pdf.prefetch, p.arxiv_id) for p in papers
+            }
+            for i, paper in enumerate(papers, 1):
+                logger.info(f"[Ollama] [{i}/{total}] {paper.arxiv_id}")
+                # 이 논문 PDF 다운로드가 끝날 때까지만 대기 (나머지는 계속 병렬 진행)
+                try:
+                    futures[paper.arxiv_id].result(timeout=60)
+                except Exception as e:
+                    logger.debug(f"[Ollama] prefetch 대기 실패 ({paper.arxiv_id}): {e} — 초록 모드로 진행")
+                # 요약 시점엔 PDF가 캐시에 있으므로 get_paper_text는 캐시 히트
+                results.append(self.summarize(paper))
+
         ok = sum(1 for p in results if not p.summary_one_line.startswith("요약 실패"))
         logger.info(f"[Ollama] 배치 완료: {total}편 (성공 {ok} / 실패 {total - ok})")
         return results

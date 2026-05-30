@@ -42,6 +42,7 @@ class Config:
     PDF_MAX_PAGES: int = int(os.getenv("PDF_MAX_PAGES", "15"))
     PDF_MAX_SECTION_CHARS: int = int(os.getenv("PDF_MAX_SECTION_CHARS", "1800"))  # 섹션당 최대 글자
     PDF_MAX_TOTAL_CHARS: int = int(os.getenv("PDF_MAX_TOTAL_CHARS", "14000"))     # 프롬프트 본문 총량
+    PDF_PREFETCH_WORKERS: int = int(os.getenv("PDF_PREFETCH_WORKERS", "4"))       # PDF 병렬 다운로드 스레드 수
 
     # 스케줄 — 매주 월·목 09:00 KST
     SCHEDULE_HOUR: int = 9

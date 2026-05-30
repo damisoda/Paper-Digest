@@ -84,6 +84,13 @@ class PDFExtractor:
             logger.warning(f"[PDF] 다운로드 실패 ({arxiv_id}): {e}")
         return None
 
+    def prefetch(self, arxiv_id: str) -> bool:
+        """PDF를 캐시에 미리 받아둔다 (성공 여부 반환). 스레드풀에서 호출 안전.
+
+        서로 다른 arxiv_id는 서로 다른 파일 경로에 기록되므로 동시 실행해도 충돌이 없다.
+        """
+        return self._download(arxiv_id) is not None
+
     # ── 섹션 추출 ───────────────────────────────────────────────────
 
     def _is_section_header(self, text: str) -> bool:
