@@ -9,8 +9,9 @@ Discord 알림 · SQLite 저장 · Obsidian 노트 생성까지 자동으로 처
 
 | 기능 | 설명 |
 |---|---|
-| 논문 수집 | arXiv API — cs.LG / cs.CL / cs.CV / cs.AI |
-| 한국어 요약 | 로컬 Ollama (`gemma4:e4b`) |
+| 논문 수집 | HuggingFace Papers 트렌딩 (upvote 기준) — 실패 시 arXiv API로 자동 fallback |
+| 한국어 요약 | 로컬 Ollama (`gemma4:e4b`) — **구조화 JSON 출력**으로 4개 항목 안정 추출, 실패 시 자동 재시도 |
+| PDF 본문 활용 | 논문 PDF에서 Method·Results 우선으로 본문 추출(최대 ~14K자)해 요약 근거로 사용 |
 | Discord 알림 | 카테고리별 Embed 전송 |
 | DB 저장 | SQLite (중복 방지) |
 | Obsidian 연동 | vault에 `.md` 파일 자동 생성, 관련 논문 위키링크 포함 |
@@ -23,11 +24,13 @@ Discord 알림 · SQLite 저장 · Obsidian 노트 생성까지 자동으로 처
 
 ```
 Paper-Digest/
-├── main.py               # 진입점 + APScheduler
+├── main.py               # 진입점 + APScheduler 파이프라인
 ├── config.py             # 환경변수 관리
 ├── database.py           # SQLite 모델 & 쿼리
-├── arxiv_collector.py    # arXiv API 수집
-├── ollama_summarizer.py  # Ollama 한국어 요약
+├── hf_collector.py       # HuggingFace Papers 트렌딩 수집 (기본)
+├── arxiv_collector.py    # arXiv API 수집 (HF 실패 시 fallback)
+├── pdf_extractor.py      # arXiv PDF 본문 추출 (Method·Results 우선)
+├── ollama_summarizer.py  # Ollama 한국어 요약 (구조화 JSON 출력 + 재시도)
 ├── discord_notifier.py   # Discord 웹훅 전송
 ├── obsidian_writer.py    # Obsidian .md 파일 생성
 ├── streamlit_app.py      # 웹 대시보드

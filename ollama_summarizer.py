@@ -1,15 +1,67 @@
-"""Ollama (gemma4:e4b)로 논문을 한국어 요약하는 모듈"""
-import re
+"""Ollama (gemma4:e4b)로 논문을 한국어 요약하는 모듈
+
+구조화 출력(Structured Output) 방식:
+  Ollama `format` 파라미터에 JSON 스키마를 넘겨 모델이 항상
+  {one_line, method, importance, results} 4개 키의 JSON만 생성하도록 강제한다.
+  → 정규식 파싱·파싱 실패 경로가 사라지고, 결과가 결정론적으로 안정된다.
+"""
+import json
+import time
 import requests
 from loguru import logger
 
 from config import config
 from database import Paper
+from pdf_extractor import PDFExtractor
 
 
-PROMPT_TEMPLATE = """\
-당신은 AI/ML 논문을 한국어로 요약하는 전문가입니다.
-아래 논문 정보를 읽고, 지정된 형식에 맞춰 정확하고 풍부하게 요약하세요.
+# ── 구조화 출력 스키마 ───────────────────────────────────────────────
+# Ollama가 이 스키마에 맞는 JSON만 생성하도록 강제 (constrained decoding)
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "one_line":   {"type": "string", "minLength": 10},
+        "method":     {"type": "string", "minLength": 30},
+        "importance": {"type": "string", "minLength": 30},
+        "results":    {"type": "string", "minLength": 20},
+    },
+    "required": ["one_line", "method", "importance", "results"],
+}
+
+_FIELD_KEYS = ("one_line", "method", "importance", "results")
+
+
+_PROMPT_WITH_PDF = """\
+당신은 AI/ML 논문을 한국어로 깊이 있게 요약하는 시니어 연구자입니다.
+아래 논문 정보와 본문(섹션별)을 읽고, 4개 항목을 JSON으로 작성하세요.
+
+=== 논문 정보 ===
+제목: {title}
+저자: {authors}
+카테고리: {category}
+초록:
+{abstract}
+
+=== 논문 본문 (섹션별, 우선순위 순) ===
+{paper_text}
+=================
+
+각 항목 작성 지침:
+- one_line: 이 논문이 무엇을 하는지 핵심을 한 문장으로. (1~2문장)
+- method: 제안하는 기술·알고리즘·아키텍처를 동작 원리 수준까지 구체적으로. 기존 방법 대비 핵심 차별점을 반드시 포함. (3~5문장)
+- importance: 어떤 문제를 해결하며 AI/ML 분야에서 갖는 의미와 실용적 가치. (2~4문장)
+- results: 보고된 정량적 성능을 수치와 함께. 벤치마크/데이터셋 이름, 비교 대상, 개선폭(%, 점수 등)을 명시. (2~4문장)
+
+엄격한 규칙:
+- 반드시 한국어로 작성. 고유명사·약어·벤치마크명은 원문 유지 가능.
+- 본문에 근거한 구체적 서술만. 추상적 미사여구·일반론 금지.
+- 본문에 해당 정보가 없으면 지어내지 말고 "본문에 명시되지 않음"이라고 쓸 것.
+- 출력은 지정된 JSON 스키마만. 그 외 텍스트·마크다운·코드펜스 금지.\
+"""
+
+_PROMPT_ABSTRACT_ONLY = """\
+당신은 AI/ML 논문을 한국어로 깊이 있게 요약하는 시니어 연구자입니다.
+아래 논문 정보(초록 기준)를 읽고, 4개 항목을 JSON으로 작성하세요.
 
 === 논문 정보 ===
 제목: {title}
@@ -19,56 +71,35 @@ PROMPT_TEMPLATE = """\
 {abstract}
 =================
 
-아래 4개 항목을 반드시 이모지와 함께 작성하세요.
-각 항목은 최소 2문장 이상, 구체적인 내용을 포함해야 합니다.
+각 항목 작성 지침:
+- one_line: 이 논문이 무엇을 하는지 핵심을 한 문장으로. (1~2문장)
+- method: 제안하는 기술·알고리즘·아키텍처를 가능한 구체적으로. 기존 방법 대비 차별점 포함. (2~4문장)
+- importance: 어떤 문제를 해결하며 갖는 의미와 실용적 가치. (2~3문장)
+- results: 초록에 언급된 정량적 성능·핵심 발견을 수치와 함께. (1~3문장)
 
-📌 한 줄 요약: 이 논문이 무엇을 하는지 핵심을 한 문장으로 명확하게.
-🔍 핵심 방법: 논문에서 제안하는 기술, 알고리즘, 아키텍처를 구체적으로 설명. 기존 방법과의 차이점 포함.
-💡 왜 중요한가: 이 연구가 AI/ML 분야에서 갖는 의미와 실용적 가치. 어떤 문제를 해결하는가.
-📊 주요 결과: 논문에서 보고한 정량적 성능(수치, 벤치마크), 또는 핵심 발견 사항.
-
-규칙:
-- 반드시 한국어로만 작성
-- 각 항목 이모지(📌 🔍 💡 📊)는 반드시 포함
-- 추상적인 표현 금지, 논문 내용에 근거한 구체적 서술
-- 모르는 내용은 초록에서 추론하여 작성\
+엄격한 규칙:
+- 반드시 한국어로 작성. 고유명사·약어·벤치마크명은 원문 유지 가능.
+- 초록에 근거한 구체적 서술만. 추상적 미사여구 금지.
+- 초록에 정보가 없으면 지어내지 말고 "초록에 명시되지 않음"이라고 쓸 것.
+- 출력은 지정된 JSON 스키마만. 그 외 텍스트·마크다운·코드펜스 금지.\
 """
-
-# 요약 섹션 파싱용 정규식 — 우선순위 순으로 시도
-_PATTERN_SETS = [
-    # 1순위: 이모지 포함 (정상 응답)
-    {
-        "one_line":   r"📌\s*한 줄 요약\s*[:\-]?\s*(.+?)(?=🔍|💡|📊|$)",
-        "method":     r"🔍\s*핵심 방법\s*[:\-]?\s*(.+?)(?=📌|💡|📊|$)",
-        "importance": r"💡\s*왜 중요한가\s*[:\-]?\s*(.+?)(?=📌|🔍|📊|$)",
-        "results":    r"📊\s*주요 결과\s*[:\-]?\s*(.+?)(?=📌|🔍|💡|$)",
-    },
-    # 2순위: 이모지 없는 한글 헤더
-    {
-        "one_line":   r"한 줄 요약\s*[:\-]?\s*(.+?)(?=핵심 방법|왜 중요|주요 결과|$)",
-        "method":     r"핵심 방법\s*[:\-]?\s*(.+?)(?=한 줄 요약|왜 중요|주요 결과|$)",
-        "importance": r"왜 중요한가?\s*[:\-]?\s*(.+?)(?=한 줄 요약|핵심 방법|주요 결과|$)",
-        "results":    r"주요 결과\s*[:\-]?\s*(.+?)(?=한 줄 요약|핵심 방법|왜 중요|$)",
-    },
-    # 3순위: ** 마크다운 볼드 헤더
-    {
-        "one_line":   r"\*+[📌]?\s*한 줄 요약[:\*\s]*(.+?)(?=\*+[🔍📌💡📊]|\Z)",
-        "method":     r"\*+[🔍]?\s*핵심 방법[:\*\s]*(.+?)(?=\*+[🔍📌💡📊]|\Z)",
-        "importance": r"\*+[💡]?\s*왜 중요한가[:\*\s]*(.+?)(?=\*+[🔍📌💡📊]|\Z)",
-        "results":    r"\*+[📊]?\s*주요 결과[:\*\s]*(.+?)(?=\*+[🔍📌💡📊]|\Z)",
-    },
-]
 
 
 class OllamaSummarizer:
-    def __init__(self, base_url: str = None, model: str = None, timeout: int = None):
+    def __init__(self, base_url: str = None, model: str = None, timeout: int = None,
+                 max_retries: int = None):
         self.base_url = (base_url or config.OLLAMA_BASE_URL).rstrip("/")
         self.model = model or config.OLLAMA_MODEL
         self.timeout = timeout or config.OLLAMA_TIMEOUT
+        self.max_retries = config.OLLAMA_MAX_RETRIES if max_retries is None else max_retries
         self._url = f"{self.base_url}/api/generate"
+        self._pdf = PDFExtractor(
+            cache_dir=config.PDF_CACHE_DIR,
+            max_pages=config.PDF_MAX_PAGES,
+        )
 
     def _call(self, prompt: str) -> str:
-        """Ollama /api/generate 호출 → 응답 텍스트 반환"""
+        """Ollama /api/generate 호출 (구조화 출력) → JSON 문자열 반환"""
         try:
             resp = requests.post(
                 self._url,
@@ -76,7 +107,12 @@ class OllamaSummarizer:
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": 2048},
+                    "format": SUMMARY_SCHEMA,  # ← JSON 스키마로 출력 강제
+                    "options": {
+                        "temperature": 0.2,
+                        "num_ctx": config.OLLAMA_NUM_CTX,
+                        "num_predict": config.OLLAMA_NUM_PREDICT,
+                    },
                 },
                 timeout=self.timeout,
             )
@@ -89,44 +125,78 @@ class OllamaSummarizer:
         except requests.exceptions.HTTPError as e:
             raise RuntimeError(f"Ollama HTTP 오류: {e}")
 
-    def _parse(self, raw: str) -> dict:
-        """응답 텍스트에서 4개 섹션 파싱 — 패턴 셋을 순서대로 시도"""
-        keys = ["one_line", "method", "importance", "results"]
-        for pattern_set in _PATTERN_SETS:
-            parsed = {k: "" for k in keys}
-            for key, pattern in pattern_set.items():
-                m = re.search(pattern, raw, re.DOTALL)
-                if m:
-                    parsed[key] = m.group(1).strip()
-            # 하나라도 파싱 성공하면 해당 결과 반환
-            if any(parsed.values()):
-                return parsed
+    @staticmethod
+    def _parse(raw: str) -> dict | None:
+        """구조화 JSON 응답 파싱 + 검증. 실패 시 None."""
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # 혹시 코드펜스/잡텍스트가 섞이면 첫 { ~ 마지막 } 만 추려 재시도
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end <= start:
+                return None
+            try:
+                data = json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(data, dict):
+            return None
+        parsed = {k: str(data.get(k, "")).strip() for k in _FIELD_KEYS}
+        # 핵심 항목이 비어 있으면 무효 처리 (재시도 유도)
+        if not parsed["one_line"] or not parsed["method"]:
+            return None
+        return parsed
 
-        # 모든 패턴 실패 시 원본 첫 500자를 한 줄 요약에 저장
-        logger.warning("[Ollama] 요약 파싱 실패 — 원본을 저장합니다.")
-        return {k: "" for k in keys} | {"one_line": raw[:500]}
+    def _build_prompt(self, paper: Paper) -> str:
+        """PDF 본문이 있으면 본문 프롬프트, 없으면 초록 전용 프롬프트"""
+        paper_text = self._pdf.get_paper_text(paper.arxiv_id)
+        if paper_text:
+            logger.info(f"[Ollama] PDF 본문 사용: {paper.arxiv_id} ({len(paper_text)}자)")
+            return _PROMPT_WITH_PDF.format(
+                title=paper.title, authors=paper.authors,
+                category=paper.categories, abstract=paper.abstract,
+                paper_text=paper_text,
+            )
+        logger.info(f"[Ollama] 초록 전용 모드: {paper.arxiv_id}")
+        return _PROMPT_ABSTRACT_ONLY.format(
+            title=paper.title, authors=paper.authors,
+            category=paper.categories, abstract=paper.abstract,
+        )
 
     def summarize(self, paper: Paper) -> Paper:
-        """논문 한 편 요약 후 Paper 필드에 결과 채워 반환"""
+        """논문 한 편 요약 후 Paper 필드에 결과 채워 반환 (실패 시 재시도)"""
         logger.info(f"[Ollama] 요약: {paper.arxiv_id} | {paper.title[:50]}")
-        prompt = PROMPT_TEMPLATE.format(
-            title=paper.title,
-            authors=paper.authors,
-            category=paper.categories,
-            abstract=paper.abstract,
-        )
-        try:
-            raw = self._call(prompt)
-            p = self._parse(raw)
-            paper.raw_summary = raw
-            paper.summary_one_line = p["one_line"]
-            paper.summary_method = p["method"]
-            paper.summary_importance = p["importance"]
-            paper.summary_results = p["results"]
-            logger.success(f"[Ollama] 완료: {paper.arxiv_id}")
-        except RuntimeError as e:
-            logger.error(f"[Ollama] 실패 ({paper.arxiv_id}): {e}")
-            paper.summary_one_line = f"요약 실패: {e}"
+        prompt = self._build_prompt(paper)
+
+        attempts = self.max_retries + 1
+        last_err = "알 수 없는 오류"
+        for attempt in range(1, attempts + 1):
+            try:
+                raw = self._call(prompt)
+                parsed = self._parse(raw)
+                if parsed is None:
+                    last_err = "구조화 출력 파싱/검증 실패"
+                    logger.warning(f"[Ollama] {last_err} (시도 {attempt}/{attempts}): {paper.arxiv_id}")
+                    if attempt < attempts:
+                        time.sleep(1.5)
+                    continue
+                paper.raw_summary = raw
+                paper.summary_one_line = parsed["one_line"]
+                paper.summary_method = parsed["method"]
+                paper.summary_importance = parsed["importance"]
+                paper.summary_results = parsed["results"]
+                logger.success(f"[Ollama] 완료: {paper.arxiv_id}" + (f" (재시도 {attempt-1}회)" if attempt > 1 else ""))
+                return paper
+            except RuntimeError as e:
+                last_err = str(e)
+                logger.warning(f"[Ollama] 호출 실패 (시도 {attempt}/{attempts}, {paper.arxiv_id}): {e}")
+                if attempt < attempts:
+                    time.sleep(2.0)
+
+        logger.error(f"[Ollama] 최종 실패 ({paper.arxiv_id}): {last_err}")
+        paper.summary_one_line = f"요약 실패: {last_err}"
         return paper
 
     def summarize_batch(self, papers: list[Paper]) -> list[Paper]:
@@ -137,7 +207,8 @@ class OllamaSummarizer:
         for i, paper in enumerate(papers, 1):
             logger.info(f"[Ollama] [{i}/{total}] {paper.arxiv_id}")
             results.append(self.summarize(paper))
-        logger.info(f"[Ollama] 배치 완료: {total}편")
+        ok = sum(1 for p in results if not p.summary_one_line.startswith("요약 실패"))
+        logger.info(f"[Ollama] 배치 완료: {total}편 (성공 {ok} / 실패 {total - ok})")
         return results
 
     def health_check(self) -> bool:

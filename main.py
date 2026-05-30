@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from config import config
 from database import Database, Paper
 from arxiv_collector import ArxivCollector
+from hf_collector import HFCollector
 from ollama_summarizer import OllamaSummarizer
 from obsidian_writer import ObsidianWriter
 from discord_notifier import DiscordNotifier
@@ -53,7 +54,8 @@ def run_pipeline() -> None:
         return
 
     db = Database()
-    collector = ArxivCollector()
+    hf_collector = HFCollector()
+    arxiv_collector = ArxivCollector()
     summarizer = OllamaSummarizer()
     obsidian = ObsidianWriter(db=db)
     notifier = DiscordNotifier()
@@ -70,11 +72,14 @@ def run_pipeline() -> None:
         return
     logger.success(f"[1/6] Ollama 정상 ({config.OLLAMA_MODEL})")
 
-    # Step 2 — arXiv 수집
-    logger.info("[2/6] arXiv 논문 수집")
-    all_papers: list[Paper] = collector.collect_all()
+    # Step 2 — HuggingFace 트렌딩 논문 수집 (실패 시 arXiv로 fallback)
+    logger.info("[2/6] HuggingFace 트렌딩 논문 수집")
+    all_papers: list[Paper] = hf_collector.collect()
     if not all_papers:
-        logger.warning("수집된 논문 없음. 종료.")
+        logger.warning("[2/6] HF 수집 0편 — arXiv 최신 논문으로 fallback")
+        all_papers = arxiv_collector.collect_all()
+    if not all_papers:
+        logger.warning("수집된 논문 없음 (HF·arXiv 모두 실패). 종료.")
         return
 
     new_papers = [p for p in all_papers if not db.exists(p.arxiv_id)]

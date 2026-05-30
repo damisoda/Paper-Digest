@@ -1,8 +1,14 @@
 """Obsidian vault에 논문 요약 .md 파일을 자동 생성하는 모듈
 
+그래프 구조:
+  [[논문]] → [[cs.LG]] → [[개별 논문]]
+           → [[cs.CL]] → [[개별 논문]]
+           → [[cs.CV]] → ...
+           → [[cs.AI]] → ...
+
 저장 경로: {VAULT}/Papers/YYYY-MM/논문제목.md
-중복 방지: DB + 파일 시스템 이중 체크
-관련 논문: arXiv 키워드 검색으로 2~3편 조회 후 위키링크 삽입
+노드 파일: {VAULT}/Papers/논문.md (루트)
+           {VAULT}/Papers/cs.LG.md (카테고리)
 """
 import re
 import arxiv
@@ -14,7 +20,9 @@ from config import config
 from database import Database, Paper
 
 
-MD_TEMPLATE = """\
+# ── 템플릿 ──────────────────────────────────────────────────────────
+
+PAPER_TEMPLATE = """\
 ---
 title: "{title}"
 date: {date}
@@ -24,6 +32,8 @@ arxiv_id: {arxiv_id}
 authors: "{authors}"
 published: {published_at}
 ---
+
+> 분야: [[{category}]] | 원문: [{arxiv_id}]({arxiv_url})
 
 ## 📌 한 줄 요약
 
@@ -47,8 +57,14 @@ published: {published_at}
 
 ---
 > 🤖 *AI Paper Summarizer 자동 생성*
-> 원문: [{arxiv_id}]({arxiv_url})
 """
+
+CATEGORY_LABELS = {
+    "cs.LG": "Machine Learning",
+    "cs.CL": "Computation & Language",
+    "cs.CV": "Computer Vision",
+    "cs.AI": "Artificial Intelligence",
+}
 
 _STOPWORDS = {
     "a", "an", "the", "of", "for", "in", "on", "with", "and", "or",
@@ -64,14 +80,18 @@ class ObsidianWriter:
         self.db = db
         self._arxiv = arxiv.Client(page_size=self.related_count + 2, delay_seconds=2.0, num_retries=2)
 
-    # ── 경로 헬퍼 ──────────────────────────────────────────────
+    # ── 경로 헬퍼 ──────────────────────────────────────────────────
+
+    @property
+    def papers_dir(self) -> Path:
+        return self.vault_path / self.papers_subdir
 
     def _month_dir(self, date_str: str) -> Path:
         try:
             month = datetime.fromisoformat(date_str[:10]).strftime("%Y-%m")
         except (ValueError, TypeError):
             month = datetime.now().strftime("%Y-%m")
-        return self.vault_path / self.papers_subdir / month
+        return self.papers_dir / month
 
     def _safe_name(self, title: str) -> str:
         """OS-safe 파일명 (100자 제한)"""
@@ -81,26 +101,32 @@ class ObsidianWriter:
     def _file_path(self, paper: Paper) -> Path:
         return self._month_dir(paper.published_at) / (self._safe_name(paper.title) + ".md")
 
-    # ── 관련 논문 ──────────────────────────────────────────────
+    # ── 관련 논문 ──────────────────────────────────────────────────
 
     def _fetch_related(self, paper: Paper) -> list[dict]:
         words = [
             w for w in re.sub(r"[^a-zA-Z0-9 ]", " ", paper.title).split()
             if w.lower() not in _STOPWORDS and len(w) > 2
         ]
-        # 영문 키워드가 없으면 (한국어/한자 제목 등) arXiv ID로만 검색
         if not words:
             return []
         query = f"cat:{paper.categories} AND ti:{' '.join(words[:5])}"
         related = []
         try:
-            search = arxiv.Search(query=query, max_results=self.related_count + 3,
-                                  sort_by=arxiv.SortCriterion.Relevance)
+            search = arxiv.Search(
+                query=query,
+                max_results=self.related_count + 3,
+                sort_by=arxiv.SortCriterion.Relevance,
+            )
             for r in self._arxiv.results(search):
                 rid = r.entry_id.split("/")[-1].rsplit("v", 1)[0]
                 if rid == paper.arxiv_id:
                     continue
-                related.append({"title": r.title.strip().replace("\n", " "), "arxiv_id": rid, "url": r.entry_id})
+                related.append({
+                    "title": r.title.strip().replace("\n", " "),
+                    "arxiv_id": rid,
+                    "url": r.entry_id,
+                })
                 if len(related) >= self.related_count:
                     break
         except Exception as e:
@@ -115,13 +141,73 @@ class ObsidianWriter:
             for r in related
         )
 
-    # ── 파일 생성 ──────────────────────────────────────────────
+    # ── 그래프 노드 관리 ───────────────────────────────────────────
+
+    def _update_root_node(self, categories: set[str]) -> None:
+        """루트 노드 [[논문]] 생성 / 업데이트"""
+        root_path = self.papers_dir / "논문.md"
+        self.papers_dir.mkdir(parents=True, exist_ok=True)
+
+        cat_links = "\n".join(
+            f"- [[{cat}]] — {CATEGORY_LABELS.get(cat, cat)}"
+            for cat in sorted(categories)
+        )
+        content = f"""\
+---
+title: "논문"
+tags: [AI, index]
+---
+
+# 📚 논문 아카이브
+
+arXiv · HuggingFace Papers 트렌딩 논문 자동 요약 모음입니다.
+
+## 카테고리
+
+{cat_links}
+
+---
+> 🤖 *AI Paper Summarizer 자동 생성*
+"""
+        root_path.write_text(content, encoding="utf-8")
+        logger.debug("[Obsidian] 루트 노드 업데이트: 논문.md")
+
+    def _update_category_node(self, category: str, paper_titles: list[str]) -> None:
+        """카테고리 노드 [[cs.LG]] 등 생성 / 업데이트"""
+        cat_path = self.papers_dir / f"{category}.md"
+        self.papers_dir.mkdir(parents=True, exist_ok=True)
+
+        paper_links = "\n".join(
+            f"- [[{self._safe_name(t)}]]" for t in paper_titles
+        )
+        label = CATEGORY_LABELS.get(category, category)
+        content = f"""\
+---
+title: "{category}"
+tags: [AI, category, {category}]
+---
+
+# {category} — {label}
+
+[[논문]]
+
+## 논문 목록
+
+{paper_links}
+
+---
+> 🤖 *AI Paper Summarizer 자동 생성*
+"""
+        cat_path.write_text(content, encoding="utf-8")
+        logger.debug(f"[Obsidian] 카테고리 노드 업데이트: {category}.md ({len(paper_titles)}편)")
+
+    # ── 논문 파일 생성 ─────────────────────────────────────────────
 
     def _render(self, paper: Paper, related: list[dict]) -> str:
         def fill(text: str) -> str:
             return text.strip() or "_내용 없음_"
 
-        return MD_TEMPLATE.format(
+        return PAPER_TEMPLATE.format(
             title=paper.title.replace('"', '\\"'),
             date=datetime.now().strftime("%Y-%m-%d"),
             category=paper.categories.strip(),
@@ -165,18 +251,46 @@ class ObsidianWriter:
         return str(fp)
 
     def write_batch(self, papers: list[Paper]) -> tuple[int, int]:
-        """여러 논문 순차 저장. Returns: (저장 수, 스킵 수)"""
+        """여러 논문 순차 저장 후 그래프 노드 업데이트"""
         logger.info(f"[Obsidian] 배치 시작: {len(papers)}편")
-        saved = sum(1 for p in papers if self.write(p))
+
+        saved_papers = []
+        for p in papers:
+            path = self.write(p)
+            if path:
+                saved_papers.append(p)
+
+        saved = len(saved_papers)
         skipped = len(papers) - saved
+
+        # 그래프 노드 업데이트 (저장된 논문 기준)
+        if saved_papers:
+            self._rebuild_graph_nodes(saved_papers)
+
         logger.info(f"[Obsidian] 완료 — 저장 {saved}편 / 스킵 {skipped}편")
         return saved, skipped
+
+    def _rebuild_graph_nodes(self, papers: list[Paper]) -> None:
+        """카테고리별로 논문을 묶어 루트·카테고리 노드 재생성"""
+        # 카테고리 → 논문 제목 맵
+        cat_map: dict[str, list[str]] = {}
+        for p in papers:
+            cat = p.categories.strip()
+            cat_map.setdefault(cat, []).append(p.title)
+
+        # 카테고리 노드 업데이트
+        for cat, titles in cat_map.items():
+            self._update_category_node(cat, titles)
+
+        # 루트 노드 업데이트
+        self._update_root_node(set(cat_map.keys()))
+
+    # ── 유틸 ──────────────────────────────────────────────────────
 
     def vault_exists(self) -> bool:
         return self.vault_path.exists() and self.vault_path.is_dir()
 
     def get_saved_files(self) -> list[Path]:
-        papers_dir = self.vault_path / self.papers_subdir
-        if not papers_dir.exists():
+        if not self.papers_dir.exists():
             return []
-        return sorted(papers_dir.rglob("*.md"), reverse=True)
+        return sorted(self.papers_dir.rglob("*.md"), reverse=True)

@@ -7,16 +7,24 @@
 
 # 로그
 *.log
+logs/
+
+# PDF 캐시
+.pdf_cache/
 
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 .venv/
 venv/
+.python-version
 
 # macOS
 .DS_Store
+.AppleDouble
 
 # IDE
 .vscode/
 .idea/
+*.swp

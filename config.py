@@ -12,7 +12,10 @@ class Config:
     # Ollama
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
-    OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+    OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+    OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "8192"))      # 컨텍스트 윈도우
+    OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "1536"))  # 최대 생성 토큰
+    OLLAMA_MAX_RETRIES: int = int(os.getenv("OLLAMA_MAX_RETRIES", "2"))  # 요약 실패 시 재시도 횟수
 
     # arXiv
     ARXIV_MAX_RESULTS: int = int(os.getenv("ARXIV_MAX_RESULTS", "5"))
@@ -29,6 +32,16 @@ class Config:
     )
     OBSIDIAN_PAPERS_SUBDIR: str = os.getenv("OBSIDIAN_PAPERS_SUBDIR", "Papers")
     OBSIDIAN_RELATED_COUNT: int = int(os.getenv("OBSIDIAN_RELATED_COUNT", "3"))
+
+    # HuggingFace Papers 트렌딩
+    HF_TRENDING_LIMIT: int = int(os.getenv("HF_TRENDING_LIMIT", "20"))
+    HF_MIN_UPVOTES: int = int(os.getenv("HF_MIN_UPVOTES", "5"))
+
+    # PDF 추출
+    PDF_CACHE_DIR: str = os.getenv("PDF_CACHE_DIR", ".pdf_cache")
+    PDF_MAX_PAGES: int = int(os.getenv("PDF_MAX_PAGES", "15"))
+    PDF_MAX_SECTION_CHARS: int = int(os.getenv("PDF_MAX_SECTION_CHARS", "1800"))  # 섹션당 최대 글자
+    PDF_MAX_TOTAL_CHARS: int = int(os.getenv("PDF_MAX_TOTAL_CHARS", "14000"))     # 프롬프트 본문 총량
 
     # 스케줄 — 매주 월·목 09:00 KST
     SCHEDULE_HOUR: int = 9
