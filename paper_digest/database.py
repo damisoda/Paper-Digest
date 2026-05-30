@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from loguru import logger
 
-from config import config
+from paper_digest.config import config
 
 
 @dataclass

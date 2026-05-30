@@ -16,8 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from loguru import logger
 
-from config import config
-from database import Database, Paper
+from paper_digest.config import config
+from paper_digest.database import Database, Paper
 
 
 # ── 템플릿 ──────────────────────────────────────────────────────────

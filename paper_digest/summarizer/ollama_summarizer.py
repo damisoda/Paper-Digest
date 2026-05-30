@@ -12,9 +12,9 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, Future
 from loguru import logger
 
-from config import config
-from database import Paper
-from pdf_extractor import PDFExtractor
+from paper_digest.config import config
+from paper_digest.database import Paper
+from paper_digest.summarizer.pdf_extractor import PDFExtractor
 
 
 # ── 구조화 출력 스키마 ───────────────────────────────────────────────

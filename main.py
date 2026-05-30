@@ -12,13 +12,13 @@ from loguru import logger
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from config import config
-from database import Database, Paper
-from arxiv_collector import ArxivCollector
-from hf_collector import HFCollector
-from ollama_summarizer import OllamaSummarizer
-from obsidian_writer import ObsidianWriter
-from discord_notifier import DiscordNotifier
+from paper_digest.config import config
+from paper_digest.database import Database, Paper
+from paper_digest.collectors.arxiv_collector import ArxivCollector
+from paper_digest.collectors.hf_collector import HFCollector
+from paper_digest.summarizer.ollama_summarizer import OllamaSummarizer
+from paper_digest.outputs.obsidian_writer import ObsidianWriter
+from paper_digest.outputs.discord_notifier import DiscordNotifier
 
 
 # ── 로거 설정 ────────────────────────────────────────────────────

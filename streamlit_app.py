@@ -8,9 +8,9 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-from config import config
-from database import Database, Paper
-from obsidian_writer import ObsidianWriter
+from paper_digest.config import config
+from paper_digest.database import Database, Paper
+from paper_digest.outputs.obsidian_writer import ObsidianWriter
 
 
 # ── 페이지 설정 ──────────────────────────────────────────────────

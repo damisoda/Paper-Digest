@@ -24,19 +24,23 @@ Discord 알림 · SQLite 저장 · Obsidian 노트 생성까지 자동으로 처
 
 ```
 Paper-Digest/
-├── main.py               # 진입점 + APScheduler 파이프라인
-├── config.py             # 환경변수 관리
-├── database.py           # SQLite 모델 & 쿼리
-├── hf_collector.py       # HuggingFace Papers 트렌딩 수집 (기본)
-├── arxiv_collector.py    # arXiv API 수집 (HF 실패 시 fallback)
-├── pdf_extractor.py      # arXiv PDF 본문 추출 (Method·Results 우선)
-├── ollama_summarizer.py  # Ollama 한국어 요약 (구조화 JSON 출력 + 재시도)
-├── discord_notifier.py   # Discord 웹훅 전송
-├── obsidian_writer.py    # Obsidian .md 파일 생성
-├── streamlit_app.py      # 웹 대시보드
-├── requirements.txt      # 의존성
-├── .env.example          # 환경변수 템플릿
-└── .gitignore
+├── main.py                       # 진입점 + APScheduler 파이프라인
+├── streamlit_app.py              # 웹 대시보드
+├── requirements.txt              # 의존성
+├── .env.example                  # 환경변수 템플릿
+├── .gitignore
+└── paper_digest/                 # 핵심 패키지
+    ├── config.py                 # 환경변수 관리
+    ├── database.py               # SQLite 모델 & 쿼리
+    ├── collectors/               # 논문 수집
+    │   ├── hf_collector.py       #   HuggingFace 트렌딩 (기본)
+    │   └── arxiv_collector.py    #   arXiv API (HF 실패 시 fallback)
+    ├── summarizer/               # 요약
+    │   ├── ollama_summarizer.py  #   Ollama 한국어 요약 (구조화 JSON + 재시도 + grounding)
+    │   └── pdf_extractor.py      #   PDF 본문 추출 (Method·Results 우선)
+    └── outputs/                  # 출력
+        ├── obsidian_writer.py    #   Obsidian .md 생성
+        └── discord_notifier.py   #   Discord 웹훅 전송
 ```
 
 ---

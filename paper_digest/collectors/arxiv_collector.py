@@ -3,8 +3,8 @@ import arxiv
 from datetime import datetime, timezone
 from loguru import logger
 
-from config import config
-from database import Paper
+from paper_digest.config import config
+from paper_digest.database import Paper
 
 
 class ArxivCollector:

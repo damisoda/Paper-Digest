@@ -12,7 +12,7 @@ import fitz  # PyMuPDF
 from pathlib import Path
 from loguru import logger
 
-from config import config
+from paper_digest.config import config
 
 
 # 섹션 우선순위 — 숫자가 작을수록 먼저 예산을 배정 (요약 4개 항목에 직접 기여하는 순서)
