@@ -53,6 +53,10 @@ class DiscordNotifier:
             sections.append(f"💡 **왜 중요한가**\n{paper.summary_importance}")
         if paper.summary_results:
             sections.append(f"📊 **주요 결과**\n{paper.summary_results}")
+        if paper.grounding_note:
+            sections.append(f"> ⚠️ {paper.grounding_note}")
+        if paper.summary_limitations:
+            sections.append(f"⚠️ **한계점**\n{paper.summary_limitations}")
 
         description = "\n\n".join(sections) or "요약 없음"
         if len(description) > 4000:

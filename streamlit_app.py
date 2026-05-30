@@ -84,15 +84,20 @@ def render_card(paper: dict) -> None:
     method = paper.get("summary_method", "")
     importance = paper.get("summary_importance", "")
     results = paper.get("summary_results", "")
+    limitations = paper.get("summary_limitations", "")
+    grounding_note = paper.get("grounding_note", "")
     has_summary = any([one_line, method, importance, results])
 
     with st.expander("📋 요약 보기" if has_summary else "⏳ 요약 없음"):
         if has_summary:
+            if grounding_note:
+                st.warning(f"⚠️ {grounding_note}")
             sections = [
                 ("📌", "한 줄 요약", one_line),
                 ("🔍", "핵심 방법", method),
                 ("💡", "왜 중요한가", importance),
                 ("📊", "주요 결과", results),
+                ("⚠️", "한계점", limitations),
             ]
             # 실제 내용이 있는 항목만 추려서 마지막에만 divider 생략
             filled = [(e, l, t) for e, l, t in sections if t]

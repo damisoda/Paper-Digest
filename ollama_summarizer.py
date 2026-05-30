@@ -5,6 +5,7 @@
   {one_line, method, importance, results} 4개 키의 JSON만 생성하도록 강제한다.
   → 정규식 파싱·파싱 실패 경로가 사라지고, 결과가 결정론적으로 안정된다.
 """
+import re
 import json
 import time
 import requests
@@ -21,15 +22,19 @@ from pdf_extractor import PDFExtractor
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
-        "one_line":   {"type": "string", "minLength": 10},
-        "method":     {"type": "string", "minLength": 30},
-        "importance": {"type": "string", "minLength": 30},
-        "results":    {"type": "string", "minLength": 20},
+        "one_line":    {"type": "string", "minLength": 10},
+        "method":      {"type": "string", "minLength": 30},
+        "importance":  {"type": "string", "minLength": 30},
+        "results":     {"type": "string", "minLength": 20},
+        "limitations": {"type": "string"},
     },
-    "required": ["one_line", "method", "importance", "results"],
+    "required": ["one_line", "method", "importance", "results", "limitations"],
 }
 
-_FIELD_KEYS = ("one_line", "method", "importance", "results")
+_FIELD_KEYS = ("one_line", "method", "importance", "results", "limitations")
+
+# grounding 검증용 — 요약 속 '의미 있는' 수치(소수점 포함 또는 2자리 이상)
+_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
 _PROMPT_WITH_PDF = """\
@@ -52,10 +57,12 @@ _PROMPT_WITH_PDF = """\
 - method: 제안하는 기술·알고리즘·아키텍처를 동작 원리 수준까지 구체적으로. 기존 방법 대비 핵심 차별점을 반드시 포함. (3~5문장)
 - importance: 어떤 문제를 해결하며 AI/ML 분야에서 갖는 의미와 실용적 가치. (2~4문장)
 - results: 보고된 정량적 성능을 수치와 함께. 벤치마크/데이터셋 이름, 비교 대상, 개선폭(%, 점수 등)을 명시. (2~4문장)
+- limitations: 논문이 스스로 밝힌 한계·제약·실패 사례, 또는 명시되지 않았다면 방법론상 예상되는 한계. 한계가 전혀 파악되지 않으면 "본문에 한계가 명시되지 않음". (1~3문장)
 
 엄격한 규칙:
 - 반드시 한국어로 작성. 고유명사·약어·벤치마크명은 원문 유지 가능.
 - 본문에 근거한 구체적 서술만. 추상적 미사여구·일반론 금지.
+- **수치(정확도·점수·파라미터 수 등)는 반드시 본문에 실제로 등장한 값만 사용. 추정·반올림·창작 금지.** 본문에 수치가 없으면 수치를 쓰지 말 것.
 - 본문에 해당 정보가 없으면 지어내지 말고 "본문에 명시되지 않음"이라고 쓸 것.
 - 출력은 지정된 JSON 스키마만. 그 외 텍스트·마크다운·코드펜스 금지.\
 """
@@ -77,10 +84,12 @@ _PROMPT_ABSTRACT_ONLY = """\
 - method: 제안하는 기술·알고리즘·아키텍처를 가능한 구체적으로. 기존 방법 대비 차별점 포함. (2~4문장)
 - importance: 어떤 문제를 해결하며 갖는 의미와 실용적 가치. (2~3문장)
 - results: 초록에 언급된 정량적 성능·핵심 발견을 수치와 함께. (1~3문장)
+- limitations: 초록에서 드러나는 한계, 또는 방법론상 예상되는 제약. 파악 불가 시 "초록만으로는 한계 파악 어려움". (1~2문장)
 
 엄격한 규칙:
 - 반드시 한국어로 작성. 고유명사·약어·벤치마크명은 원문 유지 가능.
 - 초록에 근거한 구체적 서술만. 추상적 미사여구 금지.
+- **수치는 초록에 실제로 등장한 값만 사용. 추정·창작 금지.**
 - 초록에 정보가 없으면 지어내지 말고 "초록에 명시되지 않음"이라고 쓸 것.
 - 출력은 지정된 JSON 스키마만. 그 외 텍스트·마크다운·코드펜스 금지.\
 """
@@ -150,6 +159,31 @@ class OllamaSummarizer:
             return None
         return parsed
 
+    @staticmethod
+    def _ground_numbers(results_text: str, ground_text: str) -> str:
+        """results 속 수치가 원문에 실제로 존재하는지 대조.
+
+        원문에서 못 찾은 수치 목록을 경고 문자열로 반환 (모두 확인되면 빈 문자열).
+        잘림·표기차이로 인한 오탐 가능성이 있으므로 '경고'로만 사용한다.
+        """
+        if not results_text or not ground_text:
+            return ""
+        src = ground_text.replace(",", "")
+        unverified, seen = [], set()
+        for m in _NUM_RE.finditer(results_text):
+            n = m.group()
+            # 단순 개수(한 자리 정수)는 검증 대상에서 제외 — 지표성 수치만
+            if "." not in n and len(n) < 2:
+                continue
+            if n in seen:
+                continue
+            seen.add(n)
+            if n.replace(",", "") not in src:
+                unverified.append(n)
+        if not unverified:
+            return ""
+        return "본문에서 확인되지 않은 수치(잘림 또는 환각 가능): " + ", ".join(unverified[:8])
+
     def _build_prompt(self, paper: Paper) -> str:
         """PDF 본문이 있으면 본문 프롬프트, 없으면 초록 전용 프롬프트"""
         paper_text = self._pdf.get_paper_text(paper.arxiv_id)
@@ -188,6 +222,12 @@ class OllamaSummarizer:
                 paper.summary_method = parsed["method"]
                 paper.summary_importance = parsed["importance"]
                 paper.summary_results = parsed["results"]
+                paper.summary_limitations = parsed["limitations"]
+                # 수치 grounding: PDF 본문(넓게 추출) + 초록과 대조
+                ground_text = self._pdf.get_grounding_text(paper.arxiv_id) + " " + paper.abstract
+                paper.grounding_note = self._ground_numbers(parsed["results"], ground_text)
+                if paper.grounding_note:
+                    logger.warning(f"[Ollama] grounding 경고 ({paper.arxiv_id}): {paper.grounding_note}")
                 logger.success(f"[Ollama] 완료: {paper.arxiv_id}" + (f" (재시도 {attempt-1}회)" if attempt > 1 else ""))
                 return paper
             except RuntimeError as e:

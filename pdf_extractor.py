@@ -167,6 +167,24 @@ class PDFExtractor:
             logger.warning(f"[PDF] fallback 추출 실패: {e}")
             return ""
 
+    def get_grounding_text(self, arxiv_id: str) -> str:
+        """수치 grounding 검증 전용 — 캐시된 PDF의 본문 텍스트를 넓게 추출.
+
+        프롬프트에 넣는 텍스트(섹션 선별·14K 제한)와 달리, 잘림으로 인한 오탐을
+        줄이려 가능한 많은 페이지 텍스트를 그대로 모은다. LLM에는 전달하지 않는다.
+        """
+        pdf_path = self._pdf_path(arxiv_id)
+        if not pdf_path.exists():
+            return ""
+        try:
+            doc = fitz.open(str(pdf_path))
+            parts = [doc[i].get_text("text") for i in range(min(len(doc), self.max_pages))]
+            doc.close()
+            return " ".join(parts)
+        except Exception as e:
+            logger.debug(f"[PDF] grounding 텍스트 추출 실패 ({arxiv_id}): {e}")
+            return ""
+
     def get_paper_text(self, arxiv_id: str) -> str:
         """
         논문의 핵심 섹션 텍스트를 하나의 문자열로 반환.

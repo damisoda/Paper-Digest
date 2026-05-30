@@ -26,6 +26,8 @@ class Paper:
     summary_method: str = ""         # 🔍 핵심 방법
     summary_importance: str = ""     # 💡 왜 중요한가
     summary_results: str = ""        # 📊 주요 결과
+    summary_limitations: str = ""    # ⚠️ 한계점
+    grounding_note: str = ""         # 수치 grounding 검증 경고 (비어 있으면 이상 없음)
     raw_summary: str = ""            # Ollama 원본 응답
     obsidian_path: str = ""          # Obsidian .md 파일 경로 (저장 완료 시 기록)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -62,21 +64,26 @@ class Database:
                     summary_method    TEXT DEFAULT '',
                     summary_importance TEXT DEFAULT '',
                     summary_results   TEXT DEFAULT '',
+                    summary_limitations TEXT DEFAULT '',
+                    grounding_note    TEXT DEFAULT '',
                     raw_summary       TEXT DEFAULT '',
                     obsidian_path     TEXT DEFAULT '',
                     created_at        TEXT NOT NULL
                 )
             """)
-            # 기존 DB에 obsidian_path 컬럼이 없으면 마이그레이션
+            # 기존 DB에 없는 컬럼 마이그레이션 (이름 → 정의)
             existing_cols = [
                 row[1]
                 for row in conn.execute("PRAGMA table_info(papers)").fetchall()
             ]
-            if "obsidian_path" not in existing_cols:
-                conn.execute(
-                    "ALTER TABLE papers ADD COLUMN obsidian_path TEXT DEFAULT ''"
-                )
-                logger.info("[DB] 마이그레이션: obsidian_path 컬럼 추가")
+            for col, ddl in (
+                ("obsidian_path", "TEXT DEFAULT ''"),
+                ("summary_limitations", "TEXT DEFAULT ''"),
+                ("grounding_note", "TEXT DEFAULT ''"),
+            ):
+                if col not in existing_cols:
+                    conn.execute(f"ALTER TABLE papers ADD COLUMN {col} {ddl}")
+                    logger.info(f"[DB] 마이그레이션: {col} 컬럼 추가")
 
             # 검색 성능을 위한 인덱스 생성
             conn.execute(
@@ -106,18 +113,22 @@ class Database:
             with self._get_conn() as conn:
                 conn.execute("""
                     UPDATE papers SET
-                        summary_one_line   = CASE WHEN summary_one_line = '' THEN ? ELSE summary_one_line END,
-                        summary_method     = CASE WHEN summary_method = '' THEN ? ELSE summary_method END,
-                        summary_importance = CASE WHEN summary_importance = '' THEN ? ELSE summary_importance END,
-                        summary_results    = CASE WHEN summary_results = '' THEN ? ELSE summary_results END,
-                        raw_summary        = CASE WHEN raw_summary = '' THEN ? ELSE raw_summary END,
-                        obsidian_path      = CASE WHEN obsidian_path = '' THEN ? ELSE obsidian_path END
+                        summary_one_line    = CASE WHEN summary_one_line = '' THEN ? ELSE summary_one_line END,
+                        summary_method      = CASE WHEN summary_method = '' THEN ? ELSE summary_method END,
+                        summary_importance  = CASE WHEN summary_importance = '' THEN ? ELSE summary_importance END,
+                        summary_results     = CASE WHEN summary_results = '' THEN ? ELSE summary_results END,
+                        summary_limitations = CASE WHEN summary_limitations = '' THEN ? ELSE summary_limitations END,
+                        grounding_note      = CASE WHEN grounding_note = '' THEN ? ELSE grounding_note END,
+                        raw_summary         = CASE WHEN raw_summary = '' THEN ? ELSE raw_summary END,
+                        obsidian_path       = CASE WHEN obsidian_path = '' THEN ? ELSE obsidian_path END
                     WHERE arxiv_id = ?
                 """, (
                     paper.summary_one_line,
                     paper.summary_method,
                     paper.summary_importance,
                     paper.summary_results,
+                    paper.summary_limitations,
+                    paper.grounding_note,
                     paper.raw_summary,
                     paper.obsidian_path,
                     paper.arxiv_id,
@@ -131,9 +142,9 @@ class Database:
                 INSERT INTO papers (
                     arxiv_id, title, authors, abstract, categories,
                     published_at, arxiv_url, summary_one_line, summary_method,
-                    summary_importance, summary_results, raw_summary,
-                    obsidian_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    summary_importance, summary_results, summary_limitations,
+                    grounding_note, raw_summary, obsidian_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 paper.arxiv_id,
                 paper.title,
@@ -146,6 +157,8 @@ class Database:
                 paper.summary_method,
                 paper.summary_importance,
                 paper.summary_results,
+                paper.summary_limitations,
+                paper.grounding_note,
                 paper.raw_summary,
                 paper.obsidian_path,
                 paper.created_at,

@@ -50,6 +50,10 @@ published: {published_at}
 ## 📊 주요 결과
 
 {summary_results}
+{grounding_note}
+## ⚠️ 한계점
+
+{summary_limitations}
 
 ## 🔗 관련 논문
 
@@ -207,6 +211,10 @@ tags: [AI, category, {category}]
         def fill(text: str) -> str:
             return text.strip() or "_내용 없음_"
 
+        # grounding 경고가 있으면 주요 결과 아래에 콜아웃으로 노출
+        grounding = paper.grounding_note.strip()
+        grounding_block = f"\n> [!warning] {grounding}\n" if grounding else ""
+
         return PAPER_TEMPLATE.format(
             title=paper.title.replace('"', '\\"'),
             date=datetime.now().strftime("%Y-%m-%d"),
@@ -219,6 +227,8 @@ tags: [AI, category, {category}]
             summary_method=fill(paper.summary_method),
             summary_importance=fill(paper.summary_importance),
             summary_results=fill(paper.summary_results),
+            grounding_note=grounding_block,
+            summary_limitations=fill(paper.summary_limitations),
             related_papers=self._fmt_related(related),
         )
 
